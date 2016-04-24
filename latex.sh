@@ -3,11 +3,12 @@
 # latex-inline
 # Author: https://github.com/lewisjb
 
-LATEX_ENDINGS=("aux" "log" "pdf" "png")
+LATEX_ENDINGS=("tex" "aux" "log" "pdf" "png")
 W3MIMAGEDISPLAY="/usr/lib/w3m/w3mimgdisplay"
 FILENAME="tmp"
 DEBUG=false
 DPI=100
+ANCHOR=""
 
 # Output basic usage explanation
 usage() {
@@ -28,11 +29,11 @@ Flags:
 EOF
 }
 
-# If there aren't any parameters, show them the basic usage and quit
-if [ -z "$1" ]; then
-	usage
-	exit 1
-fi
+overflow_warning() {
+	echo -e "Warning: Using latex-inline after a whole 'page' of terminal \
+history won't work as intended."
+}
+
 
 # Handle flags
 while test $# -gt 0 ; do
@@ -63,9 +64,13 @@ while test $# -gt 0 ; do
 	shift
 done
 
+if [ -z "$1" ]; then
+	usage
+	exit 1
+fi
 
 # Create tmp - LaTeX file to be converted to PNG
-cat << EOF > $FILENAME
+cat << EOF > "$FILENAME.tex"
 	\\documentclass[convert={density=$DPI}]{standalone}
 	\\usepackage{color}
 	\\begin{document}
@@ -80,13 +85,23 @@ else
 	pdflatex -shell-escape $FILENAME > /dev/null
 fi
 
+# Terminal rows
+ROWS=`tput lines`
+
+
 # Get the current cursor position
 echo -en "\E[6n"
 read -sdR CURPOS
 CURPOS=${CURPOS#*[}
 # CURPOS = row;col
-IFS=';' read -ra POS <<< "$CURPOS"
-# POS = (row col)
+IFS=';' read -ra CURPOS <<< "$CURPOS"
+# CURPOS = (row col)
+
+CURLINE="${CURPOS[0]}"
+if [ "$CURLINE" -eq "$ROWS" ]; then
+	overflow_warning
+fi
+
 
 # Get the terminal height (px)
 stty -echo
@@ -95,26 +110,27 @@ printf "%b%s" "\033[14t\033[c"
 read -t 1 -d c -s -r SIZE; stty echo
 HEIGHT=`echo "$SIZE" | awk -F ';' '{print $2}'`
 
-# Terminal rows
-ROWS=`tput lines`
 
 # Font height = px/rows
 FONTH=$(($HEIGHT / $ROWS))
 
 # Y-offset = Y cursor row * font height
-yoff=$(((${POS[0]})*$FONTH))
+yoff=$((($CURLINE)*$FONTH))
+yoff=$(($yoff-$FONTH))
 
-
-# Display it
+# Get dimensions of image
 read width height <<< `echo -e "5;$FILENAME.png" | $W3MIMAGEDISPLAY`
+# Move cursor down
+tput cup $((($height/$FONTH)+${CURPOS[0]})) 0
+
+# TODO: Find better way, but a delay is needed for tput to take effect
+sleep 0.1
+# Display it
 echo -e "0;1;0;$yoff;$width;$height;;;;;$FILENAME.png\n4;\n3;" | $W3MIMAGEDISPLAY
 
-# Move cursor down
-tput cup $((($height/$FONTH)+${POS[0]}+1)) 0
 
 # Cleanup
 if [ "$DEBUG" = false ]; then
-	rm $FILENAME
 	for i in "${LATEX_ENDINGS[@]}"
 	do
 		rm "$FILENAME.$i"
